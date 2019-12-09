@@ -1,6 +1,8 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.layers as tf_layers
+from tensorflow.python.keras.layers import Input, Dense, Embedding
+from tensorflow.keras.models import Model
 
 class GraphConvPlaceHolder:
 
@@ -57,11 +59,18 @@ class GraphPlaceHolder:
         with tf.name_scope("graph_structure"):
 
             self.ver2 = ver2
+            #[None]を与えると実行時に任意のサイズの配列を与えることが可能
+            #1.Tensorの型 2.割り当てる変数のshape 3.変数の名前
             self.nodes = tf.placeholder(tf.int32, [None], name = "nodes")
             self.conv_data = []
+
+            #layer_num=3
+            #layer_num=2
             for i in range(layer_num):
+                #ver2=True
                 if ver2: self.conv_data.append(GraphConv2PlaceHolder(edge_arities, "conv_data{}".format(i+1)))
                 else: self.conv_data.append(GraphConvPlaceHolder("conv_data{}".format(i+1)))
+            #
             self.pool_data = [
                 GraphPoolPlaceHolder("pool_data{}".format(i+1))
                 for i in range(layer_num)
@@ -92,6 +101,7 @@ class GraphPlaceHolder:
             result.update(conv.feed(graph_list.get_conv_data()))
             result.update(pool.feed(graph_list.get_pool_data(remaining_layers)))
 
+
         return result
 
 class GraphConvLayer:
@@ -103,14 +113,29 @@ class GraphConvLayer:
         self.activation_fn = activation_fn
 
     def __call__(self, structure, data): # data: [total_nodes, dim]
+        #isinstance():ふたつの引数がオブジェクトとクラスまたはそのスーパークラスの関係にあればTrueを返す。
         if isinstance(structure, GraphPlaceHolder):
             assert(structure.ver2 == False)
             structure = structure.get_conv_data()
 
         input_dim = int(data.shape[-1])
+
+        #gather:集約
         gathered = tf.gather(data, structure.gather_indices)
+        print("gatherd:{}".format(gathered))
+
+        """gathered = Embedding(
+            output_dim=self.output_dim,
+            input_dim=input_dim,
+            )(gathered)"""
+
+        #reduce:減らす
         reduced = self.reduction(gathered, structure.segments)
+        print("reduced:{}".format(reduced))
+        #arrange:整理、配置
         arranged = tf.reshape(reduced, [-1, self.input_mul*input_dim])
+        print("arranged:{}".format(arranged))
+
         result = tf_layers.fully_connected(arranged, self.output_dim,
                                            activation_fn = self.activation_fn)
         return result
@@ -123,6 +148,10 @@ class GraphConv2Layer:
         self.activation_fn = activation_fn
         self.index_to_subarity = np.concatenate([[arity]*arity for arity in edge_arities])-1
 
+        print("output_dim: {}".format(self.output_dim))
+        print("edge_arities: {}".format(self.edge_arities))
+        print("index_to_suarity: {}".format(self.index_to_subarity))
+
     def __call__(self, structure, data): # data: [total_nodes, dim]
 
         if isinstance(structure, GraphPlaceHolder):
@@ -130,17 +159,36 @@ class GraphConv2Layer:
             structure = structure.get_conv_data()
 
         input_dim = int(data.shape[-1])
+
+        #tf.contrib.layers.fully_connected(,activation fn=None)
         next_data = tf_layers.linear(data, num_outputs = self.output_dim)
+
+        """next_data = Embedding(
+            output_dim=self.output_dim,
+            input_dim=input_dim,
+            )(next_data)"""
+
+        #テンソルの形状
         shape = tf.shape(next_data)
+
+        #tf.expand_dims(input, axis) は input テンソルの axis に指定した階に 1 次元挿入する．
+        #e.g. shape が (2,3,4) の input の axis=2 に 1 次元を挿入すると (2,3,1,4) になる．
+        #tf.gather(params, indices, axis) は params テンソルの axis に指定した階でスライスして，indeices で指定したインデックスのテンソルだけ取り出してくっつける．
+        #e.g. [[1,2,3],[4,5,6]] という params テンソルの axis=1 でスライスすると [1,4] と [2,5] と [3,6] という 3 つのテンソルができ，indeces=[1,2] なら 1,2 番目のテンソルを取り出してくっつけるので [[2,3],[5,6]] になる．
+
         for (gather_indices, scatter_indices), subarity \
             in zip(structure.gather_scatter_indices, self.index_to_subarity):
             gathered = tf.gather(data, gather_indices)
+            #reshape:形状を変える
             flattened = tf.reshape(gathered, [-1, subarity*input_dim])
+            #変換する
             transformed = tf_layers.linear(flattened, num_outputs = self.output_dim)
             #next_data = tf.scatter_nd_add(next_data, scatter_indices, transformed)
             scatter_indices = tf.expand_dims(scatter_indices, axis = -1)
             next_data = next_data + tf.scatter_nd(scatter_indices, transformed, shape)
-            print(next_data)
+
+        print(next_data)
+            #activation_fn=tf.nn.relu
         return self.activation_fn(next_data)
 
 class GraphPoolLayer:
@@ -167,21 +215,29 @@ class GraphInitLayer:
             tf.zeros([1, self.dim]),
             tf.get_variable(name="embeddings", shape=[self.vocab_size, self.dim]),
         ], axis = 0)
+
         result = tf.gather(embeddings, structure.get_nodes())
+
         return result
 
-class ConvNetwork:
+class ConvNetwork:#Tensorboardの表示，レイヤー員sタンスの呼び出し.
+
     # layer_signature = ( (2, 64), (2, 128), (2, 256) ): (l,d) a = number of layers, b = dimension between poolings
     #def __init__(self, vocab_size, layer_signature, edge_arities, ver2 = False):
-    def __init__(self, vocab_size,layer_signature, edge_arities, ver2 = False):
+    def __init__(self, vocab_size,layer_signature, edge_arities, ver2 ):
 
         self.ver2 = ver2
-
+        print("ver2:{}".format(ver2))
+        #listよりnumpy配列のほうが早く計算できる．
+        #self.edge_arities=[3,3]
         self.edge_arities = np.array(edge_arities)
+        #input_mul=13
         input_mul = np.sum(self.edge_arities * (self.edge_arities-1)) + 1
 
         self.placeholder = None
         self.layer_signature = layer_signature
+
+        #Tensor("Step/layer_0_1_conv/add:0", shape=(?, 64), dtype=float32)
         self.layers = [
             tf.make_template('layer_0_0_init', GraphInitLayer(layer_signature[0][1], vocab_size))
         ]
@@ -189,6 +245,8 @@ class ConvNetwork:
         for i, (layer_num, dim) in enumerate(layer_signature):
             for j in range(layer_num):
                 if ver2:
+                    #GraphConv2Layerインスタンス生成
+                    print("ver2:{}".format(ver2))
                     layer = GraphConv2Layer(dim, edge_arities)
                 else:
                     layer = GraphConvLayer(dim, input_mul)
@@ -198,21 +256,33 @@ class ConvNetwork:
 
             self.layers.append(tf.make_template("layer_{}_pool".format(i+1),
                                                 GraphPoolLayer()))
+            print("layer_{}_pool".format(i+1))
 
     def __call__(self):
         data = None
 
         if self.placeholder is not None:
+            #convnetworkは１度だけ呼び出すことができます
             raise Exception("ConvNetwork can be called just once")
 
+        #self.layer_signature=2
         self.placeholder = GraphPlaceHolder(layer_num = len(self.layer_signature),
                                             edge_arities = self.edge_arities,
                                             ver2 = self.ver2)
 
         for layer in self.layers:
-            if data is None: data = layer(self.placeholder)
-            else: data = layer(self.placeholder, data)
+            #data is None
+            #layer=GraphConv2Layerインスタンスのcallを呼び出し.
+            if data is None:
+                print("data is None!!!!!!!!!!")
+                data = layer(self.placeholder)
 
+            else:
+                print("dataは存在!!!!!!!!!!")
+                data = layer(self.placeholder, data)
+
+
+        #self.ver2=True
         if self.ver2: return data
         else: return data[1:]
 

@@ -6,8 +6,7 @@ def predict_loss_acc(logits, real):
 
     predict = tf.to_int32(tf.argmax(logits, real.shape.ndims))
     loss = tf.losses.sparse_softmax_cross_entropy(logits = logits, labels = real, scope="loss")
-    print(predict)
-    print(real)
+    #予測がラベルに一致する頻度を計算する
     acc = tf_metrics.accuracy(predict, real)
 
     return predict, loss, acc

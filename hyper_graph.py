@@ -7,17 +7,21 @@ class HyperGraph:
         self.nodes = []
         self.edges = []
 
-    def nodes_num(self): return len(self.nodes)
+    def nodes_num(self):
+        return len(self.nodes) #self.nodeの長さ
 
-    def new_node(self, data):
+    def new_node(self, data):#self.nodeの長さ-1を返す
+        #print("new_node")
         self.nodes.append(data)
         return self.nodes_num()-1
 
-    def add_edge(self, edge_type, edge_nodes):
+    def add_edge(self, edge_type, edge_nodes):#self.edgesにmeaningとnodeを追加
+        #print("add_edge")
         edge = len(self.edges)
         self.edges.append((edge_type, edge_nodes))
-
+        
     def to_simple_graph(self):
+        #print("to_simple_graph")
         simple_nodes = [set() for node in self.nodes]
         for edge in self.edges:
             for n1 in edge[1]:
@@ -27,6 +31,7 @@ class HyperGraph:
         return [np.array(list(node)) for node in simple_nodes]
 
     def partition(self, num_clusters, partition):
+        #print("partition")
 
         factor_graph = HyperGraph()
         factor_graph.nodes = [[] for node in range(num_clusters)]
